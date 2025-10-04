@@ -1,0 +1,4 @@
+dearpygui
+pyserial
+numpy
+sounddevice
