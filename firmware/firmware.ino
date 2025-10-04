@@ -10,10 +10,11 @@
  + <binary int16 LE samples> + DONE
 
   Notes:
-    - Uses a single global buffer to avoid heap fragmentation
+    - Allocates capture buffer on demand to conserve SRAM
     - Clamps sr to 8000 max and n to 80k max by default
 */
 #include <Arduino.h>
+#include <stdlib.h>
 
 #if defined(PC3)
   #define MIC_PIN PC3
@@ -29,18 +30,57 @@ static const uint32_t MAX_SECONDS = 10;
 static const uint32_t MAX_SAMPLES = MAX_SR * MAX_SECONDS; // 80,000
 static const uint16_t TX_CHUNK = 1024;    // samples per write during bulk send
 
-static int16_t sampleBuf[MAX_SAMPLES];    // ~160 KB global buffer
+static int16_t *sampleBuf = nullptr;
+static uint32_t sampleBufCapacity = 0;
+
+bool ensure_buffer(uint32_t n){
+  if(sampleBufCapacity >= n) return true;
+  size_t bytes = (size_t)n * sizeof(int16_t);
+  int16_t *newBuf = (int16_t*)realloc(sampleBuf, bytes);
+  if(!newBuf){
+    return false;
+  }
+  sampleBuf = newBuf;
+  sampleBufCapacity = n;
+  return true;
+}
 
 bool parse_rec_cmd(const String &line, uint32_t &sr, uint32_t &n) {
   if (!line.startsWith("REC")) return false;
   int c1 = line.indexOf(',');
   int c2 = line.indexOf(',', c1 + 1);
   if (c1 < 0 || c2 < 0) return false;
-  sr = (uint32_t) line.substring(c1 + 1, c2).toInt();
-  n  = (uint32_t) line.substring(c2 + 1).toInt();
-  if (sr == 0 || n == 0) return false;
-  if (sr > MAX_SR) sr = MAX_SR;
-  if (n  > MAX_SAMPLES) n = MAX_SAMPLES;
+  uint32_t sr_requested = (uint32_t) line.substring(c1 + 1, c2).toInt();
+  uint32_t n_requested  = (uint32_t) line.substring(c2 + 1).toInt();
+  if (sr_requested == 0 || n_requested == 0) return false;
+
+  if (n_requested > MAX_SAMPLES) {
+    n_requested = MAX_SAMPLES;
+  }
+
+  sr = sr_requested;
+  if (sr > MAX_SR) {
+    sr = MAX_SR;
+  }
+
+  uint32_t effective_n = n_requested;
+  if (sr_requested != sr) {
+    uint64_t scaled = (uint64_t)n_requested * sr + (sr_requested / 2);
+    scaled /= sr_requested;
+    if (scaled == 0) {
+      scaled = 1;
+    }
+    if (scaled > MAX_SAMPLES) {
+      scaled = MAX_SAMPLES;
+    }
+    effective_n = (uint32_t)scaled;
+  }
+
+  if (effective_n > MAX_SAMPLES) {
+    effective_n = MAX_SAMPLES;
+  }
+
+  n = effective_n;
   return true;
 }
 
@@ -55,6 +95,10 @@ void setup(){
 }
 
 void record_then_send(uint32_t sr, uint32_t n){
+  if(!ensure_buffer(n)){
+    Serial.println(F("ERR,BUF"));
+    return;
+  }
   const uint32_t periodUs = 1000000UL / sr;
   uint32_t nextTick = micros() + 200;
 
