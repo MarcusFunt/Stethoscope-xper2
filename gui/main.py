@@ -382,9 +382,28 @@ class App:
             self.set_status("Not connected.")
             return
 
-        requested_sr = int(dpg.get_value("sr"))
+        try:
+            requested_sr = int(dpg.get_value("sr"))
+        except (TypeError, ValueError):
+            self.set_status("Sample rate must be a number.")
+            return
+
+        try:
+            dur = float(dpg.get_value("dur"))
+        except (TypeError, ValueError):
+            self.set_status("Duration must be a number.")
+            return
+
         sr = self._clamp_sample_rate(requested_sr)
-        dur = float(dpg.get_value("dur"))
+        if requested_sr != sr:
+            dpg.set_value("sr", sr)
+
+        if not math.isfinite(dur) or dur <= 0:
+            dur = max(dur if math.isfinite(dur) else 0.0, 0.1)
+            dpg.set_value("dur", dur)
+            self.set_status("Duration must be greater than zero.")
+            return
+
         self.current_sr = sr
         self._recording = True
         self._set_recording_enabled(False)
