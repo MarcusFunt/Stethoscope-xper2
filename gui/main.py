@@ -14,6 +14,7 @@ import threading
 import struct
 import wave
 from typing import Optional
+import queue
 
 import numpy as np
 import serial
@@ -49,13 +50,23 @@ def rec_once(ser: serial.Serial, sr: int, seconds: float) -> np.ndarray:
     ser.flush()
 
     # Expect: DATA,<n>\n
-    header = ser.readline().decode(errors="ignore").strip()
-    if not header.startswith("DATA,"):
-        # Some cores echo ACK first
+    attempts = 0
+    header = ""
+    while True:
+        header = ser.readline().decode(errors="ignore").strip()
+        if header == "":
+            attempts += 1
+            if attempts > 5:
+                raise RuntimeError("Device did not send DATA header (only blank lines).")
+            continue
         if header == "ACK":
-            header = ser.readline().decode(errors="ignore").strip()
-        if not header.startswith("DATA,"):
-            raise RuntimeError(f"Unexpected header from device: {header!r}")
+            attempts += 1
+            if attempts > 5:
+                raise RuntimeError("Device did not send DATA header (only ACK messages).")
+            continue
+        if header.startswith("DATA,"):
+            break
+        raise RuntimeError(f"Unexpected header from device: {header!r}")
 
     try:
         n_declared = int(header.split(",", 1)[1])
@@ -96,6 +107,7 @@ class App:
         self.current_sr: int = DEVICE_MAX_SR
         self._record_thread: Optional[threading.Thread] = None
         self._recording: bool = False
+        self._result_queue: "queue.Queue[tuple[Optional[np.ndarray], int, Optional[Exception]]]" = queue.Queue()
 
         dpg.create_context()
         with dpg.font_registry():
@@ -254,6 +266,7 @@ class App:
     def run(self):
         while dpg.is_dearpygui_running():
             dpg.render_dearpygui_frame()
+            self._drain_queue()
         dpg.destroy_context()
 
     # ---------- Background helpers ----------
@@ -261,14 +274,22 @@ class App:
     def _record_worker(self, sr: int, dur: float):
         ser = self.ser
         if ser is None:
-            dpg.invoke(lambda: self._finish_recording(None, sr, RuntimeError("Serial port disconnected.")))
+            self._result_queue.put((None, sr, RuntimeError("Serial port disconnected.")))
             return
         try:
             data = rec_once(ser, sr, dur)
         except Exception as exc:
-            dpg.invoke(lambda: self._finish_recording(None, sr, exc))
+            self._result_queue.put((None, sr, exc))
             return
-        dpg.invoke(lambda: self._finish_recording(data, sr, None))
+        self._result_queue.put((data, sr, None))
+
+    def _drain_queue(self):
+        while True:
+            try:
+                data, sr, exc = self._result_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._finish_recording(data, sr, exc)
 
     def _finish_recording(self, data: Optional[np.ndarray], sr: int, error: Optional[Exception]):
         self._record_thread = None
