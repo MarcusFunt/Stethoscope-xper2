@@ -56,26 +56,34 @@ def rec_once(ser: serial.Serial, sr: int, seconds: float) -> np.ndarray:
     ser.flush()
 
     # Expect: DATA,<n>\n
-    attempts = 0
     header = ""
+    ack_seen = False
+    # Allow the device at least the requested recording duration plus a
+    # little slack to deliver the DATA header. The previous fixed attempt
+    # counter caused a false timeout for long captures (e.g. 10 s) because
+    # we would give up before the device finished sampling.
+    wait_budget = max(5.0, seconds + 2.0)
+    wait_deadline = time.monotonic() + wait_budget
     while True:
         raw = ser.readline()
         if raw == b"":
-            attempts += 1
-            if attempts > 5:
+            if time.monotonic() > wait_deadline:
+                if ack_seen:
+                    raise RuntimeError("Device did not send DATA header after ACK.")
                 raise RuntimeError("Device did not send DATA header (only blank lines).")
             continue
 
         stripped = raw.strip()
         if stripped == b"":
-            attempts += 1
-            if attempts > 5:
+            if time.monotonic() > wait_deadline:
+                if ack_seen:
+                    raise RuntimeError("Device did not send DATA header after ACK.")
                 raise RuntimeError("Device did not send DATA header (only blank lines).")
             continue
         if stripped.endswith(b"ACK"):
-            attempts += 1
-            if attempts > 5:
-                raise RuntimeError("Device did not send DATA header (only ACK messages).")
+            ack_seen = True
+            if time.monotonic() > wait_deadline:
+                raise RuntimeError("Device did not send DATA header after ACK.")
             continue
         idx = stripped.find(b"DATA,")
         if idx != -1:
