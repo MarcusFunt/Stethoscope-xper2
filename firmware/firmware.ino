@@ -1,7 +1,7 @@
 /*
   XIAO MG24 Sense — buffered capture then bulk send
   Target: 8 kHz sample rate, up to 10 s (80k samples ~160 KB)
-  Mic pin: PC3
+  Mic pin: PC9
 
   Protocol unchanged:
     Host sends:   REC,<sr_hz>,<num_samples>
@@ -16,13 +16,13 @@
 #include <Arduino.h>
 #include <stdlib.h>
 
-#if defined(PC3)
-  #define MIC_PIN PC3
-#elif defined(PIN_PC3)
-  #define MIC_PIN PIN_PC3
+#if defined(PC9)
+  #define MIC_PIN PC9
+#elif defined(PIN_PC9)
+  #define MIC_PIN PIN_PC9
 #else
-  #warning "PC3 not defined by this core; adjust MIC_PIN."
-  #define MIC_PIN A0
+  #warning "PC9 not defined by this core; adjust MIC_PIN."
+  #define MIC_PIN PC9
 #endif
 
 static const uint32_t MAX_SR = 8000;      // hard limit per your use case
