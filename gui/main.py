@@ -46,6 +46,11 @@ def open_serial(port: str, timeout=2.0) -> serial.Serial:
 def rec_once(ser: serial.Serial, sr: int, seconds: float) -> np.ndarray:
     n = int(round(sr * seconds))
     cmd = f"REC,{sr},{n}\n".encode()
+    # Discard any stray bytes from previous runs before issuing the command.
+    # Without this, stale binary audio from an earlier failed capture could
+    # appear before the ACK/DATA headers and trigger "Unexpected header"
+    # errors on the host side.
+    ser.reset_input_buffer()
     ser.write(cmd)
     ser.flush()
 
@@ -53,20 +58,36 @@ def rec_once(ser: serial.Serial, sr: int, seconds: float) -> np.ndarray:
     attempts = 0
     header = ""
     while True:
-        header = ser.readline().decode(errors="ignore").strip()
-        if header == "":
+        raw = ser.readline()
+        if raw == b"":
             attempts += 1
             if attempts > 5:
                 raise RuntimeError("Device did not send DATA header (only blank lines).")
             continue
-        if header == "ACK":
+
+        stripped = raw.strip()
+        if stripped == b"":
+            attempts += 1
+            if attempts > 5:
+                raise RuntimeError("Device did not send DATA header (only blank lines).")
+            continue
+        if stripped.endswith(b"ACK"):
             attempts += 1
             if attempts > 5:
                 raise RuntimeError("Device did not send DATA header (only ACK messages).")
             continue
-        if header.startswith("DATA,"):
-            break
-        raise RuntimeError(f"Unexpected header from device: {header!r}")
+        idx = stripped.find(b"DATA,")
+        if idx != -1:
+            header_bytes = stripped[idx:]
+            try:
+                header = header_bytes.decode("ascii")
+            except UnicodeDecodeError:
+                pass
+            else:
+                break
+
+        preview = stripped.decode("ascii", errors="replace")
+        raise RuntimeError(f"Unexpected header from device: {preview!r}")
 
     try:
         n_declared = int(header.split(",", 1)[1])
