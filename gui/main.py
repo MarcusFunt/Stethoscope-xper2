@@ -10,6 +10,7 @@ Optional (for saving WAV without external libs we use stdlib wave)
 
 import sys
 import time
+import math
 import threading
 import struct
 import wave
@@ -129,6 +130,22 @@ class App:
         self._record_thread: Optional[threading.Thread] = None
         self._recording: bool = False
         self._result_queue: "queue.Queue[tuple[Optional[np.ndarray], int, Optional[Exception]]]" = queue.Queue()
+        self._record_start_time: float = 0.0
+        self._record_duration: float = 0.0
+        self._record_pulse: float = 0.0
+        self._post_record_flash_until: float = 0.0
+        self._post_record_flash_duration: float = 0.0
+        self._post_record_flash_color = (110, 150, 210, 255)
+        self._connected: bool = False
+        self._connected_port_label: str = ""
+        self._conn_pulse: float = 0.0
+        self._last_frame_time: float = time.perf_counter()
+        self._record_color_idle = (110, 150, 210, 255)
+        self._record_color_success = (120, 210, 150, 255)
+        self._record_color_error = (230, 140, 90, 255)
+        self._record_color_recording = (120, 200, 255, 255)
+        self._conn_color_connected = (110, 200, 150, 255)
+        self._conn_color_disconnected = (200, 90, 90, 255)
 
         dpg.create_context()
         self._apply_theme()
@@ -142,6 +159,27 @@ class App:
         ):
             dpg.add_text("Capture audio from the XIAO MG24 Sense in style.", color=(190, 205, 230, 255))
             dpg.add_spacer(height=6)
+            with dpg.group(horizontal=True, horizontal_spacing=32):
+                with dpg.group():
+                    dpg.add_text("Device", color=(149, 182, 255, 255))
+                    with dpg.group(horizontal=True, horizontal_spacing=8):
+                        dpg.add_text("●", tag="conn_indicator", color=(200, 90, 90, 255))
+                        dpg.add_text("Disconnected", tag="conn_label")
+                with dpg.group():
+                    dpg.add_text("Session", color=(149, 182, 255, 255))
+                    with dpg.group(horizontal=True, horizontal_spacing=10):
+                        dpg.add_loading_indicator(
+                            tag="record_spinner",
+                            radius=5.5,
+                            style=1,
+                            color=(130, 190, 255, 220),
+                            secondary_color=(80, 120, 200, 180),
+                            show=False,
+                        )
+                        dpg.add_text("Idle", tag="record_label")
+                        dpg.add_text("●", tag="record_indicator", color=(110, 150, 210, 255))
+                    dpg.add_progress_bar(tag="record_progress", default_value=0.0, width=260, overlay="0%", show=False)
+            dpg.add_spacer(height=10)
             with dpg.group(horizontal=True, horizontal_spacing=18):
                 with dpg.child_window(width=340, autosize_y=True, border=False):
                     dpg.add_text("Connection", color=(149, 182, 255, 255))
@@ -206,6 +244,9 @@ class App:
         dpg.show_viewport()
         dpg.set_primary_window("main", True)
 
+        self._set_connection_state(False)
+        self._set_record_visual_idle()
+
     # ---------- UI callbacks ----------
 
     def _apply_theme(self):
@@ -239,6 +280,39 @@ class App:
     def set_status(self, txt: str):
         dpg.set_value("status", txt)
 
+    def _set_connection_state(self, connected: bool, port_label: str = ""):
+        self._connected = connected
+        self._connected_port_label = port_label
+        if connected:
+            label = f"Connected ({port_label})" if port_label else "Connected"
+            color = self._conn_color_connected
+        else:
+            label = "Disconnected"
+            color = self._conn_color_disconnected
+        dpg.set_value("conn_label", label)
+        dpg.configure_item("conn_indicator", color=color)
+
+    def _set_record_visual_idle(self):
+        dpg.configure_item("record_spinner", show=False)
+        dpg.configure_item("record_progress", show=False)
+        dpg.set_value("record_label", "Idle")
+        dpg.configure_item("record_indicator", color=self._record_color_idle)
+        self._post_record_flash_color = self._record_color_idle
+
+    def _set_record_visual_error(self):
+        dpg.configure_item("record_spinner", show=False)
+        dpg.configure_item("record_progress", show=False)
+        dpg.set_value("record_label", "Error")
+        dpg.configure_item("record_indicator", color=self._record_color_error)
+        self._post_record_flash_color = self._record_color_error
+
+    def _set_record_visual_success(self):
+        dpg.configure_item("record_spinner", show=False)
+        dpg.configure_item("record_progress", show=False)
+        dpg.set_value("record_label", "Captured")
+        dpg.configure_item("record_indicator", color=self._record_color_success)
+        self._post_record_flash_color = self._record_color_success
+
     def _set_recording_enabled(self, enabled: bool):
         dpg.configure_item("record_btn", enabled=enabled)
 
@@ -260,12 +334,15 @@ class App:
             self.set_status("Already connected.")
             return
         idx = dpg.get_value("port_combo")
+        display_label = ""
         if isinstance(idx, int):
             # Dear PyGui returns index for combos
             if idx < 0 or idx >= len(self.ports_devices):
                 self.set_status("Select a serial port first.")
                 return
             port = self.ports_devices[idx]
+            if 0 <= idx < len(self.ports_labels):
+                display_label = self.ports_labels[idx]
         else:
             # Older DPG may return label; map it
             label = idx
@@ -274,13 +351,18 @@ class App:
             except Exception:
                 self.set_status("Select a serial port first.")
                 return
+            display_label = label
 
         try:
             self.ser = open_serial(port)
+            if not display_label:
+                display_label = port
+            self._set_connection_state(True, display_label)
             self.set_status(f"Connected to {port}.")
         except Exception as e:
             self.set_status(f"Failed to open {port}: {e}")
             self.ser = None
+            self._set_connection_state(False)
 
     def on_disconnect(self):
         if self.ser:
@@ -290,6 +372,7 @@ class App:
                 pass
             self.ser = None
             self.set_status("Disconnected.")
+        self._set_connection_state(False)
 
     def on_record(self):
         if self._recording:
@@ -305,6 +388,18 @@ class App:
         self.current_sr = sr
         self._recording = True
         self._set_recording_enabled(False)
+        self._record_start_time = time.perf_counter()
+        self._record_duration = max(dur, 0.0)
+        self._record_pulse = 0.0
+        self._post_record_flash_until = 0.0
+        self._post_record_flash_duration = 0.0
+        self._post_record_flash_color = self._record_color_recording
+        dpg.configure_item("record_spinner", show=True)
+        dpg.configure_item("record_progress", show=True)
+        dpg.set_value("record_progress", 0.0)
+        dpg.configure_item("record_progress", overlay="0%")
+        dpg.set_value("record_label", "Recording…")
+        dpg.configure_item("record_indicator", color=self._record_color_recording)
         if sr != requested_sr:
             dpg.set_value("sr", sr)
             status_msg = f"Recording {dur:.2f}s at {sr} Hz (device limit)."
@@ -350,9 +445,13 @@ class App:
         self.current_samples = None
         dpg.set_value("series", [[], []])
         self.set_status("Cleared.")
+        self._set_record_visual_idle()
+        self._post_record_flash_until = 0.0
+        self._post_record_flash_duration = 0.0
 
     def run(self):
         while dpg.is_dearpygui_running():
+            self._update_animation()
             dpg.render_dearpygui_frame()
             self._drain_queue()
         dpg.destroy_context()
@@ -379,16 +478,74 @@ class App:
                 break
             self._finish_recording(data, sr, exc)
 
+    def _update_animation(self):
+        now = time.perf_counter()
+        dt = now - self._last_frame_time
+        if dt < 0:
+            dt = 0.0
+        self._last_frame_time = now
+
+        if self._recording:
+            self._record_pulse = (self._record_pulse + dt * 3.2) % (2 * math.pi)
+            intensity = 0.5 + 0.5 * math.sin(self._record_pulse)
+            record_color = []
+            for i in range(3):
+                base = self._record_color_recording[i]
+                record_color.append(int(base + (255 - base) * intensity * 0.6))
+            dpg.configure_item("record_indicator", color=(*record_color, 255))
+
+            if self._record_duration > 0.0:
+                progress = (now - self._record_start_time) / self._record_duration
+            else:
+                progress = 0.0
+            progress = max(0.0, min(progress, 0.99))
+            dpg.set_value("record_progress", progress)
+            dpg.configure_item("record_progress", overlay=f"{progress * 100:.0f}%")
+        else:
+            if self._post_record_flash_until > now and self._post_record_flash_duration > 0:
+                ratio = (self._post_record_flash_until - now) / self._post_record_flash_duration
+                ratio = max(0.0, min(1.0, ratio))
+                faded_color = []
+                for i in range(3):
+                    idle = self._record_color_idle[i]
+                    flash = self._post_record_flash_color[i]
+                    faded_color.append(int(idle + (flash - idle) * ratio))
+                dpg.configure_item("record_indicator", color=(*faded_color, 255))
+            elif self._post_record_flash_until:
+                self._post_record_flash_until = 0.0
+                self._post_record_flash_duration = 0.0
+                self._post_record_flash_color = self._record_color_idle
+                dpg.configure_item("record_indicator", color=self._record_color_idle)
+
+        base_conn = self._conn_color_connected if self._connected else self._conn_color_disconnected
+        mix_conn = (180, 235, 200) if self._connected else (255, 160, 160)
+        speed = 1.25 if self._connected else 0.8
+        self._conn_pulse = (self._conn_pulse + dt * speed) % (2 * math.pi)
+        conn_wave = 0.5 + 0.5 * math.sin(self._conn_pulse)
+        conn_color = []
+        for i in range(3):
+            base = base_conn[i]
+            mix = mix_conn[i]
+            conn_color.append(int(base + (mix - base) * conn_wave * 0.6))
+        dpg.configure_item("conn_indicator", color=(*conn_color, 255))
+
     def _finish_recording(self, data: Optional[np.ndarray], sr: int, error: Optional[Exception]):
         self._record_thread = None
         self._recording = False
         self._set_recording_enabled(True)
+        self._record_duration = 0.0
 
         if error is not None:
+            self._set_record_visual_error()
+            self._post_record_flash_duration = 2.0
+            self._post_record_flash_until = time.perf_counter() + 2.0
             self.set_status(f"Record error: {error}")
             return
 
         if data is None:
+            self._set_record_visual_error()
+            self._post_record_flash_duration = 2.0
+            self._post_record_flash_until = time.perf_counter() + 2.0
             self.set_status("No data received.")
             return
 
@@ -398,6 +555,11 @@ class App:
         dpg.set_value("series", [t.tolist(), data.astype(float).tolist()])
         dpg.fit_axis_data("xaxis")
         dpg.fit_axis_data("yaxis")
+        dpg.set_value("record_progress", 1.0)
+        dpg.configure_item("record_progress", overlay="100%")
+        self._set_record_visual_success()
+        self._post_record_flash_duration = 1.5
+        self._post_record_flash_until = time.perf_counter() + 1.5
         self.set_status(f"Received {len(data)} samples.")
 
 
