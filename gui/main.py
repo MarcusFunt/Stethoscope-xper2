@@ -110,46 +110,113 @@ class App:
         self._result_queue: "queue.Queue[tuple[Optional[np.ndarray], int, Optional[Exception]]]" = queue.Queue()
 
         dpg.create_context()
-        with dpg.font_registry():
-            pass  # use default fonts
+        self._apply_theme()
 
-        with dpg.window(tag="main", label="XIAO MG24 Sense — USB CDC Audio", width=950, height=640):
-            with dpg.group(horizontal=True):
-                dpg.add_text("Port:")
-                dpg.add_combo(self.ports_labels, width=320, tag="port_combo")
-                dpg.add_button(label="Refresh", callback=self.on_refresh_ports)
-                dpg.add_button(label="Connect", callback=self.on_connect)
-                dpg.add_button(label="Disconnect", callback=self.on_disconnect)
-                dpg.add_spacer(width=20)
-                dpg.add_text("Sample rate:")
-                dpg.add_input_int(tag="sr", default_value=DEVICE_MAX_SR, min_value=4000, max_value=DEVICE_MAX_SR, width=100)
-                dpg.add_text("Duration (s):")
-                dpg.add_input_float(tag="dur", default_value=2.0, min_value=0.1, max_value=30.0, width=100, format="%.2f")
-                dpg.add_button(label="Record", callback=self.on_record, tag="record_btn")
+        with dpg.window(
+            tag="main",
+            label="XIAO MG24 Sense — USB CDC Audio",
+            width=1100,
+            height=720,
+            no_resize=False,
+        ):
+            dpg.add_text("Capture audio from the XIAO MG24 Sense in style.", color=(190, 205, 230, 255))
+            dpg.add_spacer(height=6)
+            with dpg.group(horizontal=True, horizontal_spacing=18):
+                with dpg.child_window(width=340, autosize_y=True, border=False):
+                    dpg.add_text("Connection", color=(149, 182, 255, 255))
+                    dpg.add_separator()
+                    dpg.add_combo(self.ports_labels, width=-1, tag="port_combo", label="Serial port")
+                    with dpg.group(horizontal=True, horizontal_spacing=10):
+                        dpg.add_button(label="Refresh", callback=self.on_refresh_ports, width=150)
+                        dpg.add_button(label="Connect", callback=self.on_connect, width=150)
+                    dpg.add_button(label="Disconnect", callback=self.on_disconnect, width=-1)
 
-            dpg.add_separator()
-            dpg.add_text("Status:")
-            dpg.add_input_text(tag="status", default_value="Idle", readonly=True, width=900)
+                    dpg.add_spacer(height=10)
+                    dpg.add_text("Recording", color=(149, 182, 255, 255))
+                    dpg.add_separator()
+                    dpg.add_input_int(
+                        tag="sr",
+                        default_value=DEVICE_MAX_SR,
+                        min_value=4000,
+                        max_value=DEVICE_MAX_SR,
+                        width=-1,
+                        label="Sample rate (Hz)",
+                    )
+                    dpg.add_input_float(
+                        tag="dur",
+                        default_value=2.0,
+                        min_value=0.1,
+                        max_value=30.0,
+                        width=-1,
+                        format="%.2f",
+                        label="Duration (s)",
+                    )
+                    dpg.add_button(label="Record", callback=self.on_record, tag="record_btn", width=-1)
 
-            dpg.add_separator()
-            with dpg.plot(label="Waveform", height=360, width=-1):
-                dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="xaxis")
-                yaxis = dpg.add_plot_axis(dpg.mvYAxis, label="Amplitude", tag="yaxis")
-                dpg.add_line_series([], [], parent=yaxis, tag="series")
+                with dpg.child_window(autosize_x=True, autosize_y=True, border=False):
+                    dpg.add_text("Waveform", color=(149, 182, 255, 255))
+                    dpg.add_separator()
+                    with dpg.plot(label="", height=-1, width=-1, anti_aliased=True):
+                        dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="xaxis")
+                        yaxis = dpg.add_plot_axis(dpg.mvYAxis, label="Amplitude", tag="yaxis")
+                        dpg.add_line_series([], [], parent=yaxis, tag="series")
 
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Play", callback=self.on_play)
-                dpg.add_button(label="Save WAV", callback=self.on_save)
-                dpg.add_button(label="Clear", callback=self.on_clear)
+                    dpg.add_spacer(height=6)
+                    with dpg.group(horizontal=True, horizontal_spacing=12):
+                        dpg.add_button(label="Play", callback=self.on_play, width=100)
+                        dpg.add_button(label="Save WAV", callback=self.on_save, width=120)
+                        dpg.add_button(label="Clear", callback=self.on_clear, width=100)
 
-        dpg.create_viewport(title="XIAO MG24 Sense — Audio GUI", width=980, height=720)
+            dpg.add_spacer(height=12)
+            with dpg.child_window(height=90, autosize_x=True, border=False):
+                dpg.add_text("Status", color=(149, 182, 255, 255))
+                dpg.add_separator()
+                dpg.add_text(tag="status", default_value="Idle", wrap=520)
+
+        dpg.create_viewport(
+            title="XIAO MG24 Sense — Audio GUI",
+            width=1180,
+            height=760,
+            resizable=True,
+            min_width=980,
+            min_height=640,
+        )
         dpg.setup_dearpygui()
         dpg.show_viewport()
+        dpg.set_primary_window("main", True)
 
     # ---------- UI callbacks ----------
 
+    def _apply_theme(self):
+        with dpg.theme(tag="app_theme"):
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (230, 235, 245, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (28, 32, 40, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_PopupBg, (30, 34, 45, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (45, 55, 72, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (36, 40, 52, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (65, 90, 140, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (80, 110, 165, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (65, 90, 140, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (90, 120, 180, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (110, 150, 210, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_SliderGrab, (110, 150, 210, 255))
+                dpg.add_theme_color(dpg.mvThemeCol_SliderGrabActive, (140, 180, 235, 255))
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6)
+                dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 8)
+                dpg.add_theme_style(dpg.mvStyleVar_PopupRounding, 8)
+                dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 12, 8)
+                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 10, 6)
+
+            with dpg.theme_component(dpg.mvPlot):
+                dpg.add_theme_color(dpg.mvPlotCol_PlotBg, (22, 26, 34, 255))
+                dpg.add_theme_color(dpg.mvPlotCol_FrameBg, (30, 34, 45, 255))
+                dpg.add_theme_color(dpg.mvPlotCol_Line, (110, 190, 255, 255))
+
+        dpg.bind_theme("app_theme")
+
     def set_status(self, txt: str):
-        dpg.configure_item("status", default_value=txt)
+        dpg.set_value("status", txt)
 
     def _set_recording_enabled(self, enabled: bool):
         dpg.configure_item("record_btn", enabled=enabled)
