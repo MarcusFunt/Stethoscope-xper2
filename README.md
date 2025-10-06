@@ -10,8 +10,9 @@ This repository contains the firmware and a Python-based GUI for recording audio
 ## Firmware Setup
 
 1.  Open the `firmware/firmware.ino` file in the Arduino IDE.
-2.  Select the correct board (Seeed Studio XIAO ESP32S3) and port.
-3.  Upload the sketch to your XIAO MG24 Sense.
+2.  Install the Seeed Studio XIAO MG24 board support package via the Arduino Board Manager (Seeed provides [step-by-step instructions here](https://wiki.seeedstudio.com/xiao_mg24_getting_started/)).
+3.  Select the **Seeed Studio XIAO MG24 Sense** board and the correct port.
+4.  Upload the sketch to your XIAO MG24 Sense.
 
 ## GUI Setup and Usage
 
