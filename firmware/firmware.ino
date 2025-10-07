@@ -33,6 +33,28 @@ static const uint16_t TX_CHUNK = 1024;    // samples per write during bulk send
 static int16_t *sampleBuf = nullptr;
 static uint32_t sampleBufCapacity = 0;
 
+static uint16_t adcMidpoint = 512;
+static int16_t adcScale = 64;
+
+void configure_adc_scaling(uint8_t bits){
+  if(bits < 2 || bits > 16){
+    bits = 10;
+  }
+
+  uint32_t midpoint = 1u << (bits - 1);
+  adcMidpoint = (uint16_t)midpoint;
+
+  int32_t scaleNumerator = 1 << 15; // 32768, keeps output within int16 range
+  int32_t divisor = (int32_t)midpoint;
+  if(divisor <= 0){
+    divisor = 1;
+  }
+  adcScale = (int16_t)(scaleNumerator / divisor);
+  if(adcScale <= 0){
+    adcScale = 1;
+  }
+}
+
 bool ensure_buffer(uint32_t n){
   if(sampleBufCapacity >= n) return true;
   size_t bytes = (size_t)n * sizeof(int16_t);
@@ -87,8 +109,12 @@ bool parse_rec_cmd(const String &line, uint32_t &sr, uint32_t &n) {
 void setup(){
   Serial.begin(115200);
   while(!Serial){delay(10);}
+  configure_adc_scaling(10);
   #if defined(analogReadResolution)
     analogReadResolution(12);
+    configure_adc_scaling(12);
+  #elif defined(ADC_RESOLUTION)
+    configure_adc_scaling((uint8_t)ADC_RESOLUTION);
   #endif
   pinMode(MIC_PIN, INPUT);
   Serial.println(F("READY"));
@@ -108,11 +134,7 @@ void record_then_send(uint32_t sr, uint32_t n){
     nextTick += periodUs;
 
     int raw = analogRead(MIC_PIN);
-    #if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_MBED) || defined(ARDUINO_ARCH_RENESAS) || defined(ARDUINO_ARCH_RP2040)
-      sampleBuf[i] = (int16_t)(((int32_t)raw - 2048) * 16);  // 12-bit -> int16
-    #else
-      sampleBuf[i] = (int16_t)(((int32_t)raw - 512) * 64);   // 10-bit -> int16
-    #endif
+    sampleBuf[i] = (int16_t)(((int32_t)raw - (int32_t)adcMidpoint) * adcScale);
   }
 
   // --- bulk transmit ---
