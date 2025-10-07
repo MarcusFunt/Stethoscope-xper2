@@ -119,9 +119,12 @@ def rec_once(ser: serial.Serial, sr: int, seconds: float) -> np.ndarray:
         got += chunk
 
     # Optionally read trailing DONE line, but don't block if it's not there yet
-    ser.timeout = 0
-    _ = ser.readline()  # best-effort
-    ser.timeout = 2.0
+    prev_timeout = ser.timeout
+    try:
+        ser.timeout = 0
+        _ = ser.readline()  # best-effort
+    finally:
+        ser.timeout = prev_timeout
 
     data = np.frombuffer(buf, dtype=np.int16)
     return data
