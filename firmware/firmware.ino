@@ -15,6 +15,7 @@
 */
 #include <Arduino.h>
 #include <stdlib.h>
+#include <limits.h>
 
 #if defined(PC9)
   #define MIC_PIN PC9
@@ -32,6 +33,31 @@ static const uint16_t TX_CHUNK = 1024;    // samples per write during bulk send
 
 static int16_t *sampleBuf = nullptr;
 static uint32_t sampleBufCapacity = 0;
+static uint8_t adcBits = 10;
+static int32_t adcMidpoint = 1 << 9;   // defaults for 10-bit ADCs
+static int8_t adcShift = 6;
+
+void configureAdcScaling(uint8_t bits) {
+  if (bits < 1) {
+    bits = 1;
+  } else if (bits > 16) {
+    bits = 16;
+  }
+  adcBits = bits;
+  adcMidpoint = 1 << (adcBits - 1);
+  adcShift = (int8_t)(16 - adcBits);
+}
+
+int16_t convertAdcToInt16(int raw) {
+  int32_t centered = (int32_t)raw - adcMidpoint;
+  int32_t scaled = centered << adcShift;
+  if (scaled > INT16_MAX) {
+    scaled = INT16_MAX;
+  } else if (scaled < INT16_MIN) {
+    scaled = INT16_MIN;
+  }
+  return (int16_t)scaled;
+}
 
 bool ensure_buffer(uint32_t n){
   if(sampleBufCapacity >= n) return true;
@@ -88,7 +114,10 @@ void setup(){
   Serial.begin(115200);
   while(!Serial){delay(10);}
   #if defined(analogReadResolution)
-    analogReadResolution(12);
+    configureAdcScaling(12);
+    analogReadResolution(adcBits);
+  #else
+    configureAdcScaling(10);
   #endif
   pinMode(MIC_PIN, INPUT);
   Serial.println(F("READY"));
@@ -108,11 +137,7 @@ void record_then_send(uint32_t sr, uint32_t n){
     nextTick += periodUs;
 
     int raw = analogRead(MIC_PIN);
-    #if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_MBED) || defined(ARDUINO_ARCH_RENESAS) || defined(ARDUINO_ARCH_RP2040)
-      sampleBuf[i] = (int16_t)(((int32_t)raw - 2048) * 16);  // 12-bit -> int16
-    #else
-      sampleBuf[i] = (int16_t)(((int32_t)raw - 512) * 64);   // 10-bit -> int16
-    #endif
+    sampleBuf[i] = convertAdcToInt16(raw);
   }
 
   // --- bulk transmit ---
